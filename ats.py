@@ -1,4 +1,4 @@
-import os
+import os, json, re
 from flask import Flask, request, jsonify, render_template
 from dotenv import load_dotenv
 from google import genai
@@ -9,22 +9,9 @@ try:
 except ImportError:
     Document = None
 
-try:
-    import pytesseract
-    from PIL import Image
-except ImportError:
-    pytesseract = None
-    Image = None
-
-# ==============================
-# LOAD ENV
-# ==============================
+# ================= INIT =================
 load_dotenv()
-
 API_KEY = os.getenv("GOOGLE_API_KEY")
-if not API_KEY:
-    raise ValueError("GOOGLE_API_KEY not found in .env")
-
 client = genai.Client(api_key=API_KEY)
 
 UPLOAD_FOLDER = "uploads"
@@ -32,216 +19,103 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-# ==============================
-# FILE EXTRACTION
-# ==============================
-def extract_text_from_pdf(pdf_path):
-    """Extract text from PDF file"""
+
+# ================= FILE EXTRACTION =================
+
+def extract_text_from_pdf(path):
     text = ""
-    try:
-        with open(pdf_path, "rb") as file:
-            reader = PyPDF2.PdfReader(file)
-            for page in reader.pages:
-                text += page.extract_text() or ""
-    except Exception as e:
-        print(f"Error extracting PDF: {e}")
-        return ""
+    with open(path, "rb") as f:
+        reader = PyPDF2.PdfReader(f)
+        for p in reader.pages:
+            text += p.extract_text() or ""
     return text
 
-def extract_text_from_txt(file_path):
-    """Extract text from TXT file"""
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            return file.read()
-    except Exception as e:
-        print(f"Error extracting TXT: {e}")
-        return ""
+def extract_text_from_txt(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
 
-def extract_text_from_docx(file_path):
-    """Extract text from DOCX file"""
-    if Document is None:
+def extract_text_from_docx(path):
+    if not Document:
         return ""
-    try:
-        doc = Document(file_path)
-        text = ""
-        for paragraph in doc.paragraphs:
-            text += paragraph.text + "\n"
-        return text
-    except Exception as e:
-        print(f"Error extracting DOCX: {e}")
-        return ""
+    doc = Document(path)
+    return "\n".join(p.text for p in doc.paragraphs)
 
-def extract_text_from_image(file_path):
-    """Extract text from image using OCR"""
-    if pytesseract is None or Image is None:
-        return ""
-    try:
-        img = Image.open(file_path)
-        text = pytesseract.image_to_string(img)
-        return text
-    except Exception as e:
-        print(f"Error extracting from image: {e}")
-        return ""
+def extract_text(path):
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".pdf": return extract_text_from_pdf(path)
+    if ext == ".txt": return extract_text_from_txt(path)
+    if ext == ".docx": return extract_text_from_docx(path)
+    return ""
 
-def extract_text_from_file(file_path):
-    """Detect file type and extract text accordingly"""
-    _, ext = os.path.splitext(file_path)
-    ext = ext.lower()
-    
-    if ext == '.pdf':
-        return extract_text_from_pdf(file_path)
-    elif ext == '.txt':
-        return extract_text_from_txt(file_path)
-    elif ext == '.docx':
-        return extract_text_from_docx(file_path)
-    elif ext in ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff']:
-        return extract_text_from_image(file_path)
-    else:
-        # Try to read as text
-        return extract_text_from_txt(file_path)
+# ================= JSON CLEANER =================
 
-# ==============================
-# RESUME PARSER (LLM)
-# ==============================
-def parse_resume(resume_text):
+def clean_json(text):
+    text = text.strip()
+    text = re.sub(r"```json|```", "", text)
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    return text[start:end]
+
+# ================= LLM =================
+
+def ats_match(resume, jd):
     prompt = f"""
-You are a resume parser.
+You are an advanced ATS.
 
-Extract:
-- Skills
-- Experience summary
-- Education
-- Tools & technologies
+Return ONLY valid JSON in this format:
+
+{{
+ "match_score": number,
+ "summary": string,
+ "strengths": [string],
+ "missing_skills": [string],
+ "improvement_suggestions": [string],
+ "resume_breakdown": string
+}}
 
 Resume:
-{resume_text}
-
-Return in bullet points.
-"""
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-        return response.text
-    except Exception as e:
-        print(f"Error in parse_resume: {e}")
-        return "Error parsing resume. Please try again."
-
-# ==============================
-# JOB DESCRIPTION PARSER
-# ==============================
-def parse_job_description(jd_text):
-    prompt = f"""
-Extract:
-- Required skills
-- Responsibilities
-- Preferred qualifications
+{resume}
 
 Job Description:
-{jd_text}
-
-Return in bullet points.
+{jd}
 """
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-        return response.text
-    except Exception as e:
-        print(f"Error in parse_job_description: {e}")
-        return "Error parsing job description. Please try again."
+    res = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
+    )
+    return res.text.strip()
 
-# ==============================
-# ATS MATCHING
-# ==============================
-def ats_match(parsed_resume, parsed_jd):
-    prompt = f"""
-You are an Applicant Tracking System.
+# ================= ROUTES =================
 
-Compare the resume and job description.
-
-Resume:
-{parsed_resume}
-
-Job Description:
-{parsed_jd}
-
-Provide your analysis in the following format:
-
-### 1. Match Percentage
-**XX%** (where XX is a number between 0-100)
-
-### 2. Matching Skills
-- List matching skills here
-
-### 3. Missing Skills
-- List missing skills here
-
-### 4. Strengths
-- **Strength 1**: Details about why this is a strength
-- **Strength 2**: Details about why this is a strength
-
-### 5. Improvement Suggestions
-- **Suggestion 1**: Details about what needs improvement
-- **Suggestion 2**: Details about what needs improvement
-"""
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-        return response.text
-    except Exception as e:
-        print(f"Error in ats_match: {e}")
-        return "Error analyzing resume. Please try again."
-
-# ==============================
-# API ROUTE (PDF UPLOAD)
-# ==============================
-
-@app.route('/', methods=['GET'])
-
+@app.route("/")
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
-    if "resume" not in request.files:
-        return jsonify({"error": "Resume file is required"}), 400
-
-    resume_file = request.files["resume"]
+    resume_file = request.files.get("resume")
     jd_text = request.form.get("job_description")
 
-    if not jd_text:
-        return jsonify({"error": "Job description is required"}), 400
-    
-    if not resume_file.filename:
-        return jsonify({"error": "No file selected"}), 400
+    if not resume_file or not jd_text:
+        return jsonify({"error": "Resume and Job Description required"}), 400
 
-    # Save file
-    file_path = os.path.join(app.config["UPLOAD_FOLDER"], resume_file.filename)
-    resume_file.save(file_path)
+    path = os.path.join(app.config["UPLOAD_FOLDER"], resume_file.filename)
+    resume_file.save(path)
 
-    # Extract resume text from any file type
-    resume_text = extract_text_from_file(file_path)
+    resume_text = extract_text(path)
+    raw_json = ats_match(resume_text, jd_text)
+    cleaned = clean_json(raw_json)
 
-    # Parse using Gemini
-    parsed_resume = parse_resume(resume_text)
-    parsed_jd = parse_job_description(jd_text)
+    try:
+        ats_data = json.loads(cleaned)
+        return jsonify(ats_data)
 
-    # ATS Matching
-    ats_result = ats_match(parsed_resume, parsed_jd)
+    except Exception:
+        print("RAW AI OUTPUT:\n", raw_json)
+        print("CLEANED JSON:\n", cleaned)
+        return jsonify({"error": "Invalid AI JSON format"}), 500
 
-    return jsonify({
-        "parsed_resume": parsed_resume,
-        "parsed_job_description": parsed_jd,
-        "ats_result": ats_result
-    })
+# ================= RUN =================
 
-# ==============================
-# RUN
-# ==============================
 if __name__ == "__main__":
     app.run(debug=True, port=8080)

@@ -380,72 +380,7 @@
             document.getElementById('resume-input').value = "Jane Doe\nFrontend Specialist | jane@email.com\n\nExperience:\n- Lead Developer at TechCorp. Built responsive interfaces using React and Tailwind.\n- Optimized site performance by 40% using specialized caching.\n\nSkills:\nReact, JavaScript, CSS3, HTML5, Git, Agile.";
             lucide.createIcons();
         }
-
-        function parseAtsResult(text) {
-            const result = {
-                match_score: 0,
-                summary: "Analysis complete",
-                strengths: [],
-                improvement_suggestions: [],
-                missing_skills: [],
-                resume_breakdown: text
-            };
-            
-            // Extract Match Percentage
-            const scoreMatch = text.match(/###\s+1\.\s+Match Percentage[\s\n]*\*\*(\d+)%\*\*/i);
-            if (scoreMatch) {
-                result.match_score = parseInt(scoreMatch[1]);
-            }
-            
-            // Extract Strengths
-            const strengthsRegex = /###\s+4\.\s+Strengths[\s\n]*([\s\S]*?)(?=###\s+5\.|$)/i;
-            const strengthsMatch = text.match(strengthsRegex);
-            if (strengthsMatch) {
-                const strengthsText = strengthsMatch[1];
-                const strengths = strengthsText.match(/\*\s+([^\n]+)/g) || [];
-                result.strengths = strengths.map(s => {
-                    return s.replace(/^\*\s+/, '').trim();
-                }).filter(s => s && s.length > 0).slice(0, 3);
-            }
-            
-            if (result.strengths.length === 0) {
-                result.strengths = ["Resume reviewed", "Experience assessed", "Skills analyzed"];
-            }
-            
-            // Extract Missing Skills
-            const missingRegex = /###\s+3\.\s+Missing Skills[\s\n]*([\s\S]*?)(?=###\s+4\.|$)/i;
-            const missingMatch = text.match(missingRegex);
-            if (missingMatch) {
-                const missingText = missingMatch[1];
-                const missing = missingText.match(/\*\s+([^\n]+)/g) || [];
-                result.missing_skills = missing.map(s => {
-                    return s.replace(/^\*\s+/, '').trim();
-                }).filter(s => s && s.length > 0);
-            }
-            
-            // Extract Improvement Suggestions
-            const improvementRegex = /###\s+5\.\s+Improvement Suggestions[\s\n]*([\s\S]*?)$/i;
-            const improvementMatch = text.match(improvementRegex);
-            if (improvementMatch) {
-                const improvementText = improvementMatch[1];
-                const improvements = improvementText.match(/\*\s+([^\n]+)/g) || [];
-                result.improvement_suggestions = improvements.map(s => {
-                    return s.replace(/^\*\s+/, '').trim();
-                }).filter(s => s && s.length > 0).slice(0, 3);
-            }
-            
-            if (result.improvement_suggestions.length === 0) {
-                result.improvement_suggestions = ["Consider adding more relevant skills", "Highlight relevant projects", "Enhance technical keywords"];
-            }
-            
-            // Set summary based on score
-            result.summary = result.match_score > 75 ? "Strong match! Your profile aligns well with the role." : 
-                           result.match_score > 50 ? "Good match. Some skills need enhancement." :
-                           "Consider developing key skills mentioned in the job description.";
-            
-            return result;
-        }
-
+        
         async function runAnalysis() {
             const resumeText = document.getElementById('resume-input').value.trim();
             const jdText = document.getElementById('job-input').value.trim();
@@ -483,9 +418,8 @@
                 const data = await response.json();
                 console.log("Backend response:", data);
                 
-                const results = parseAtsResult(data.ats_result);
-                console.log("Parsed results:", results);
-                renderResults(results);
+                renderResults(data);
+
                 
                 document.getElementById('step-2').classList.add('hidden-step');
                 document.getElementById('step-3').classList.remove('hidden-step');
